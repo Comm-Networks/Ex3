@@ -19,6 +19,7 @@ int main(int argc,char** argv){
 	char file_name[] = "new_file";
 	tftp_message recv_data,sent_data;
 	short rw_mode=0; //write-1, read-0
+	char buffer[sizeof(rw_packet)];
 
 	struct timeval time;
 
@@ -66,7 +67,7 @@ int main(int argc,char** argv){
 			freeaddrinfo(my_addr);
 			client_connected=1;
 		}
-		ret_val =recvfrom(sock,&recv_data,sizeof(recv_data),&client_addr,&slen);
+		ret_val =recvfrom(sock,buffer,sizeof(buffer),&client_addr,&slen);
 		if (ret_val<0){
 			printf("Recieving failed.Discconeting client: %s.\n",strerror(errno));
 			close(sock);
@@ -76,8 +77,12 @@ int main(int argc,char** argv){
 			client_connected=0;
 			continue;
 		}
-		switch (recv_data.opcode){
+		short opcode;
+		memcpy(&opcode,buffer,sizeof(short));
+		switch (opcode){
 		case (WRQ):
+				recv_data.opcode=WRQ;
+				memcpy(&(recv_data.packet.rw_pck),&(buffer[2]),sizeof(rw_packet));
 				rw_mode=1;//write mode
 				fd = open(recv_data.packet.rw_pck.file_name,O_RDWR | O_TRUNC | O_CREAT,S_IRWXU | S_IRWXG | S_IRWXO);
 				if (fd<0){
