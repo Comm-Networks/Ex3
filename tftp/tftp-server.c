@@ -233,6 +233,7 @@ int main(int argc,char** argv){
 		}
 
 		//TODO  if error message, after sending close client.
+		//TODO  need to take care of finish of read/write from/to file.
 	}
 	close(sock);
 	return (ret_val==-1)? EXIT_FAILURE : EXIT_SUCCESS;
