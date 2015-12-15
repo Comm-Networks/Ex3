@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define MAX_CLIENTS 6
 #define DEFAULT_PORT "6900"
