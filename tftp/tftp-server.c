@@ -3,13 +3,30 @@
 
 data_packet data_pkt;error_packet err_pkt;
 ack_packet ack_pkt;rw_packet rw_pkt;
+int fd=0,sock=0;
 
-
+/*
+ * handler for SIGINT and SIGTERM signals.
+ */
+void handle_termination(int signum) {
+	if (fd>0){
+		close(fd);
+	}
+	if (sock>0){
+		close(sock);
+	}
+	exit(EXIT_SUCCESS);
+}
 
 void fillErorMessage(error_packet * err_pkt,u_short err_code,char* msg){
 	err_pkt->err_code=err_code;
 	err_pkt->opcode=ntohs(ERROR);
-	err_pkt->err_msg=msg;
+	if (msg!=NULL){
+		err_pkt->err_msg=msg;
+	}
+	else {
+		memset(err_pkt->err_msg,0,MAX_DATA_SIZE);
+	}
 }
 
 /*
@@ -46,7 +63,7 @@ int main(int argc,char** argv){
 	const char hostname[];
 	char* port = DEFAULT_PORT;
 	unsigned int size;
-	int fd,sock;
+
 	int ack_blk_num=0;
 	int data_blk_num=1;
 	int ret_val=0;
@@ -59,7 +76,13 @@ int main(int argc,char** argv){
 	struct timeval time;
 	struct stat st_buf;
 	short final_data_block=0;
+	struct sigaction bp_sa,term_sa;
 
+	sigemptyset(&term_sa.sa_mask);
+	term_sa.sa_handler = &handle_termination;
+	if (sigaction(SIGINT,&term_sa,NULL)==-1 || sigaction(SIGTERM,&term_sa,NULL)){
+		printf("Error using sigaction to handle terminating signal.%s\n",strerror(errno));
+	}
 
 	// Main loop.
 	while (1) {
@@ -193,10 +216,15 @@ int main(int argc,char** argv){
 				memcpy(&(data_pkt),&(buffer[2]),sizeof(data_packet));
 				ret_val=write(fd,data_pkt.data,MAX_DATA_SIZE);
 				if (ret_val<0){
+					opcode=(u_short) ERROR;
+					if (ENOSPC==errno){
+						fillErorMessage(&err_pkt,FULL_DISK,NULL);
+					}
+					else {
+						fillErorMessage(&err_pkt,OTHER,strerror(errno));
+					}
 					printf("Error writing to file.%s\n",strerror(errno));
 					close(fd);
-					opcode=(u_short) ERROR;
-					fillErorMessage(&err_pkt,OTHER,strerror(errno));
 				}
 				//prepraring the ack reply msg.
 				opcode= (u_short) ACK;
@@ -208,6 +236,13 @@ int main(int argc,char** argv){
 		break;
 		case (ACK):
 				memcpy(&(ack_pkt),&(buffer[2]),sizeof(ack_packet));
+				//final data block was sent by the server and now we got the final ack. we can close the file and the connection.
+				if (final_data_block){
+					close(fd);
+					close(sock);
+					client_connected=0;
+					continue;
+				}
 				opcode=(u_short)DATA;
 				data_pkt.block_num=data_blk_num++;
 				data_pkt.opcode=ntohs(opcode);
@@ -219,7 +254,7 @@ int main(int argc,char** argv){
 					fillErorMessage(&err_pkt,OTHER,strerror(errno));
 				}
 				else {
-					//checks if final data block recieved.
+					//checks if final data block read from file.
 					final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
 				}
 		break;
@@ -232,8 +267,23 @@ int main(int argc,char** argv){
 			//TODO: how to deal with fail of send. should I try to send error again?
 		}
 
-		//TODO  if error message, after sending close client.
-		//TODO  need to take care of finish of read/write from/to file.
+		if (opcode==ERROR){
+			if (fd>0){
+				close(fd);
+				fd=-1;
+			}
+			close(sock);
+			client_connected=0; //we disconnected the client after error message was sent.
+			continue;
+		}
+		else if (opcode==ACK && final_data_block){
+			//finished writing all data to file and sent the client the final ack msg.
+			close(fd);
+			close(sock);
+			client_connected=0;
+			continue;
+
+		}
 	}
 	close(sock);
 	return (ret_val==-1)? EXIT_FAILURE : EXIT_SUCCESS;
