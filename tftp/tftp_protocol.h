@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <signal.h>
+
 
 #define MAX_CLIENTS 6
 #define DEFAULT_PORT "6900"
@@ -38,9 +40,9 @@ typedef struct {
 typedef struct {
 	u_short opcode;
 	char file_name[FILENAME_MAX];
-	char zero_byte=0;
+	char zero_byte;
 	char mode[5];
-	char zero_byte_2=0;
+	char zero_byte_2;
 }rw_packet;
 #pragma pack(pop)
 
@@ -56,7 +58,7 @@ typedef struct {
 	u_short opcode;
 	u_short err_code;
 	char err_msg[MAX_DATA_SIZE];
-	char zero_byte=0;
+	char zero_byte;
 }error_packet;
 #pragma pack(pop)
 
