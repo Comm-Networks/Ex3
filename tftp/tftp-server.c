@@ -10,17 +10,17 @@ int fd=0;
 int sock=0;
 
 
-int send_data(u_short opcode) {
+int send_data(u_short opcode, int size_to_send) {
 	switch (opcode) {
 	case ACK:
 		printf("Block: %d\n", ack_pkt.block_num);
-		return sendto(sock, &ack_pkt, sizeof(ack_pkt), 0, &client_addr, sizeof(client_addr));
+		return sendto(sock, &ack_pkt, size_to_send, 0, &client_addr, sizeof(client_addr));
 
 	case DATA:
-		return sendto(sock, &data_pkt, sizeof(data_pkt), 0, &client_addr, sizeof(client_addr));
+		return sendto(sock, &data_pkt, size_to_send, 0, &client_addr, sizeof(client_addr));
 
 	case ERROR:
-		return sendto(sock, &err_pkt, sizeof(err_pkt), 0, &client_addr, sizeof(client_addr));
+		return sendto(sock, &err_pkt, size_to_send, 0, &client_addr, sizeof(client_addr));
 
 	default:
 		return -1;
@@ -74,6 +74,7 @@ int main(int argc,char** argv){
 	struct stat st_buf;
 	short final_data_block=0;
 	struct sigaction term_sa;
+	int size_to_send;
 
 
 	sigemptyset(&term_sa.sa_mask);
@@ -191,6 +192,7 @@ int main(int argc,char** argv){
 					//file already exist
 					if (ret_val>-1){
 						opcode=(u_short)ERROR;
+						size_to_send = sizeof(error_packet);
 						err_pkt.opcode=ntohs(opcode);
 						err_pkt.err_code=FILE_EXIST;
 						printf("Here\n");
@@ -207,6 +209,7 @@ int main(int argc,char** argv){
 						}
 						else{
 							opcode=(u_short)ACK;
+							size_to_send = sizeof(ack_packet);
 							ack_pkt.block_num=0;
 							ack_pkt.opcode=ntohs(opcode);
 						}
@@ -219,6 +222,7 @@ int main(int argc,char** argv){
 					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
 						if (errno==ENOENT){
 							opcode=(u_short)ERROR;
+							size_to_send = sizeof(error_packet);
 							err_pkt.err_code=FILE_NOT_FOUND;
 							err_pkt.opcode=ntohs(opcode);
 							memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
@@ -236,9 +240,10 @@ int main(int argc,char** argv){
 					}
 					//set the data msg.
 					opcode=(u_short)DATA;
-					data_pkt.block_num=last_data_blk;
+					data_pkt.block_num=ntohs(last_data_blk);
 					data_pkt.opcode=ntohs(opcode);
 					ret_val=read(fd,data_pkt.data,MAX_DATA_SIZE);
+					size_to_send = sizeof(data_packet) - (MAX_DATA_SIZE - ret_val);
 					if (ret_val<0){
 						printf("Error reading from file.%s\n",strerror(errno));
 						close(fd);
@@ -274,6 +279,7 @@ int main(int argc,char** argv){
 							printf("6\n");
 						}
 						opcode= (u_short) ACK;
+						size_to_send = sizeof(ack_packet);
 						printf("7\n");
 						//prepraring the ack reply msg.
 						ack_pkt.block_num=ntohs(++last_ack_blk);
@@ -298,12 +304,17 @@ int main(int argc,char** argv){
 					printf("ACK\n");
 					memcpy(&(ack_pkt),&(buffer),sizeof(ack_packet));
 					//we recieved a new ack packet.
+					ack_pkt.block_num = htons(ack_pkt.block_num);
 					if (ack_pkt.block_num == last_data_blk) {
 						new_packet=1;
 						/*final data block was sent by the server and now we got the final ack.
 						we can close the file and the connection.*/
 						if (final_data_block){
-							//normal termination.
+//							// Sending final ACK.
+//							opcode = (u_short) ACK;
+//							ack_pkt.block_num = ntohs(last_ack_blk);
+//							ack_pkt.opcode = ntohs(opcode);
+//							break;
 							close(fd);
 							close(sock);
 							client_connected=0;
@@ -321,12 +332,15 @@ int main(int argc,char** argv){
 						else {
 							//checks if final data block read from file.
 							final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
+
+							printf("Final: %d | %d\n", sizeof(data_pkt.data), strlen(data_pkt.data));
 						}
 					}
 					else {
 						new_packet=0;
 					}
 					opcode=(u_short)DATA;
+					size_to_send = sizeof(data_packet) - (MAX_DATA_SIZE - ret_val);
 			break;
 			default:
 				printf("Unknown!!!!!!\n");
@@ -337,7 +351,7 @@ int main(int argc,char** argv){
 			}
 		}
 
-		ret_val = send_data(opcode);
+		ret_val = send_data(opcode, size_to_send);
 		if (ret_val<0){
 			if (fd>0){
 				close(fd);
