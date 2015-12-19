@@ -1,9 +1,32 @@
 #include "tftp_protocol.h"
 
 
-data_packet data_pkt;error_packet err_pkt;
-ack_packet ack_pkt;rw_packet rw_pkt;
-int fd=0,sock=0;
+data_packet data_pkt;
+error_packet err_pkt;
+ack_packet ack_pkt;
+rw_packet rw_pkt;
+struct sockaddr client_addr;
+int fd=0;
+int sock=0;
+
+
+int send_data(u_short opcode) {
+	switch (opcode) {
+	case ACK:
+		printf("Block: %d\n", ack_pkt.block_num);
+		return sendto(sock, &ack_pkt, sizeof(ack_pkt), 0, &client_addr, sizeof(client_addr));
+
+	case DATA:
+		return sendto(sock, &data_pkt, sizeof(data_pkt), 0, &client_addr, sizeof(client_addr));
+
+	case ERROR:
+		return sendto(sock, &err_pkt, sizeof(err_pkt), 0, &client_addr, sizeof(client_addr));
+
+	default:
+		return -1;
+	}
+}
+
 
 /*
  * handler for SIGINT and SIGTERM signals.
@@ -19,6 +42,7 @@ void handle_termination(int signum) {
 }
 
 void fillErorMessage(error_packet * err_pkt,u_short err_code,char* msg){
+	printf("Err Begin\n");
 	err_pkt->err_code=err_code;
 	err_pkt->opcode=ntohs(ERROR);
 	if (msg!=NULL){
@@ -27,37 +51,15 @@ void fillErorMessage(error_packet * err_pkt,u_short err_code,char* msg){
 	else {
 		memset(err_pkt->err_msg,0,MAX_DATA_SIZE);
 	}
+	printf("Err End\n");
 }
 
-/*
- * fill bytes buffer with the proper packet.
- */
-void fillBuffer(char* buf, u_short opcode){
-	switch(opcode){
-	case(ACK):
-			memcpy(buf,&ack_pkt,sizeof(ack_packet));
-			memset(buf+sizeof(ack_packet),0,sizeof(buf)-sizeof(ack_packet)); //setting the rest of the buffer to 0.
-	break;
-	case(DATA):
-			memcpy(buf,&data_pkt,sizeof(data_packet));
-			memset(buf+sizeof(data_packet),0,sizeof(buf)-sizeof(data_packet));
-	break;
-	case(ERROR):
-			memcpy(buf,&err_pkt,sizeof(error_packet));
-			memset(buf+sizeof(error_packet),0,sizeof(buf)-sizeof(error_packet));
-	break;
-	default:
-		break;
-	}
-
-}
 
 int main(int argc,char** argv){
 
 
 	struct addrinfo  hints;
 	struct addrinfo * my_addr , *rp;
-	struct sockaddr client_addr;
 	socklen_t slen;
 	char* port = DEFAULT_PORT;
 	int last_ack_blk=0;
@@ -72,7 +74,6 @@ int main(int argc,char** argv){
 	struct stat st_buf;
 	short final_data_block=0;
 	struct sigaction term_sa;
-	fd_set read_fd;
 
 
 	sigemptyset(&term_sa.sa_mask);
@@ -81,7 +82,11 @@ int main(int argc,char** argv){
 		printf("Error using sigaction to handle terminating signal.%s\n",strerror(errno));
 	}
 
-	timeout.tv_sec=20;
+	err_pkt.zero_byte = 0;
+
+	timeout.tv_sec = 20;
+	timeout.tv_usec = 0;
+
 	term_timeout=(double) clock() / CLOCKS_PER_SEC;
 
 	// Main loop.
@@ -99,17 +104,14 @@ int main(int argc,char** argv){
 			client_connected=0;
 			continue;
 		}
-		FD_ZERO(&read_fd);
-		if (sock>0){
-			FD_SET(sock,&read_fd);
-		}
+
 		//no client is connected - open a new socket and bind.
 		if (!client_connected){
 			// Obtain address(es) matching host/port
 			memset(&hints,0,sizeof(struct addrinfo));
 			hints.ai_family = AF_INET;
 			hints.ai_socktype = SOCK_DGRAM;
-			hints.ai_flags = AI_PASSIVE;
+			hints.ai_flags = AI_ADDRCONFIG;
 			hints.ai_protocol = 0;
 			int status = getaddrinfo(NULL,port,&hints,&my_addr);
 			if (status!=0){
@@ -128,7 +130,17 @@ int main(int argc,char** argv){
 				if (sock==-1) {
 					continue;
 				}
+
+				// Setting socket timeout.
+				if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+				    perror("Error setting timeout\n");
+				}
+
 				if (bind(sock,rp->ai_addr,rp->ai_addrlen)!=-1){
+					struct sockaddr_in *ipv4 = (struct sockaddr_in *)rp->ai_addr;
+					char ipAddress[INET_ADDRSTRLEN];
+					inet_ntop(AF_INET, &(ipv4->sin_addr), ipAddress, INET_ADDRSTRLEN);
+					printf("Addr: %s\n", ipAddress);
 					break ; //successfuly binded
 				}
 				close(sock);
@@ -145,174 +157,187 @@ int main(int argc,char** argv){
 			freeaddrinfo(my_addr);
 			printf("Connected!!\n");
 			client_connected=1;
-			FD_SET(sock,&read_fd);
 		}
 		slen=sizeof(client_addr);
 		/*Buffer's size is the len of the longest packet type.
 		  If the recieved packet's size is smaller => we recieve the bytes we need. */
 
-		ret_val = select(sock,&read_fd,NULL,NULL,&timeout);
-		//timeout expired
-		if (ret_val==0){
+		memset(buffer, 0, sizeof(rw_packet));
+		ret_val = recvfrom(sock,buffer,sizeof(buffer),0,&client_addr,&slen);
+		if (ret_val<0){
+			printf("Recieving failed.Discconeting client: %s.\n",strerror(errno));
 			continue;
+//			fillErorMessage(&err_pkt,OTHER,strerror(errno));
+//			opcode=ERROR;
 		}
-		else if (ret_val<0) {
-			opcode=ERROR;
-			fillErorMessage(&err_pkt,OTHER,strerror(errno));
-		}
-		else if (FD_ISSET(sock,&read_fd)){
-			ret_val =recvfrom(sock,buffer,sizeof(buffer),0,&client_addr,&slen);
-			if (ret_val<0){
-				printf("Recieving failed.Discconeting client: %s.\n",strerror(errno));
-				fillErorMessage(&err_pkt,OTHER,strerror(errno));
-				opcode=ERROR;
-			}
-			else{
-				printf("Recieved a msg\n");
-				memcpy(&opcode,buffer,sizeof(u_short));
-				opcode = htons(opcode);
-				//check recieved packet type and prepare the output message.
-				switch (opcode){
-				case (WRQ):
-						memcpy(&(rw_pkt),&(buffer[2]),sizeof(rw_packet));
-						new_packet=1;
-						if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
-							if (errno!=ENOENT){
-								printf("Error while calling stat.%s\n",strerror(errno));
-								opcode=(u_short) ERROR;
-								fillErorMessage(&err_pkt,OTHER,strerror(errno));
-							}
+		else{
+			printf("Recieved a msg: ");
+			memcpy(&opcode,buffer,sizeof(u_short));
+			opcode = htons(opcode);
+			//check recieved packet type and prepare the output message.
+			switch (opcode){
+			case (WRQ):
+					printf("WRQ\n");
+					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
+					new_packet=1;
+					printf("File: %s\n", rw_pkt.file_name);
+					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
+						if (errno!=ENOENT){
+							printf("Error while calling stat.%s\n",strerror(errno));
+							opcode=(u_short) ERROR;
+							fillErorMessage(&err_pkt,OTHER,strerror(errno));
 						}
-						//file already exist
-						if (ret_val>-1){
+					}
+					//file already exist
+					if (ret_val>-1){
+						opcode=(u_short)ERROR;
+						err_pkt.opcode=ntohs(opcode);
+						err_pkt.err_code=FILE_EXIST;
+						printf("Here\n");
+						memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
+						printf("Heree\n");
+					}
+					//file does not exist. we can open a new file.
+					else {
+						fd = open(rw_pkt.file_name, O_RDWR | O_TRUNC | O_CREAT,S_IRWXU | S_IRWXG | S_IRWXO);
+						if (fd<0){
+							printf("Failed opening the new file.%s.\n",strerror(errno));
+							opcode=(u_short) ERROR;
+							fillErorMessage(&err_pkt,OTHER,strerror(errno));
+						}
+						else{
+							opcode=(u_short)ACK;
+							ack_pkt.block_num=0;
+							ack_pkt.opcode=ntohs(opcode);
+						}
+					}
+			break;
+			case (RRQ):
+					printf("RRQ\n");
+					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
+					new_packet=1;
+					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
+						if (errno==ENOENT){
 							opcode=(u_short)ERROR;
+							err_pkt.err_code=FILE_NOT_FOUND;
 							err_pkt.opcode=ntohs(opcode);
-							err_pkt.err_code=FILE_EXIST;
 							memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
 						}
-						//file does not exist. we can open a new file.
-						else {
-							fd = open(rw_pkt.file_name,O_RDONLY | O_TRUNC | O_CREAT,S_IRWXU | S_IRWXG | S_IRWXO);
-							if (fd<0){
-								printf("Failed opening the new file.%s.\n",strerror(errno));
-								opcode=(u_short) ERROR;
+						else{
+							printf("Error while calling stat.%s\n",strerror(errno));
+							close(sock);
+							break;
+						}
+					}
+					fd = open(rw_pkt.file_name, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+					if (fd<0){
+
+						printf("Failed opening file.%s.\n",strerror(errno));
+					}
+					//set the data msg.
+					opcode=(u_short)DATA;
+					data_pkt.block_num=last_data_blk;
+					data_pkt.opcode=ntohs(opcode);
+					ret_val=read(fd,data_pkt.data,MAX_DATA_SIZE);
+					if (ret_val<0){
+						printf("Error reading from file.%s\n",strerror(errno));
+						close(fd);
+						fillErorMessage(&err_pkt,OTHER,strerror(errno));
+					}
+					//checks if final data block recieved.
+					final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
+			break;
+			case (DATA):
+					printf("DATA\n");
+					memset(data_pkt.data, 0, MAX_DATA_SIZE);
+					memcpy(&(data_pkt),&(buffer),sizeof(data_packet));
+					data_pkt.block_num = htons(data_pkt.block_num);
+					printf("1 - %d | %d\n", data_pkt.block_num, last_ack_blk);
+					//the last ack packet we sent was recievd. this is the response a data packet.
+					if (data_pkt.block_num==last_ack_blk+1){
+						printf("2 - %d\n", fd);
+						new_packet=1;
+						ret_val=write(fd,data_pkt.data,MAX_DATA_SIZE);
+						printf("3 - %d | %d\n", ret_val, sizeof(data_pkt.data));
+						if (ret_val<0){
+							printf("4\n");
+							opcode=(u_short) ERROR;
+							if (ENOSPC==errno){
+								fillErorMessage(&err_pkt,FULL_DISK,NULL);
+							}
+							else {
 								fillErorMessage(&err_pkt,OTHER,strerror(errno));
 							}
-							else{
-								opcode=(u_short)ACK;
-								ack_pkt.block_num=0;
-								ack_pkt.opcode=ntohs(opcode);
-							}
+							printf("5\n");
+							printf("Error writing to file.%s\n",strerror(errno));
+							close(fd);
+							printf("6\n");
 						}
-				break;
-				case (RRQ):
-						memcpy(&(rw_pkt),&(buffer[2]),sizeof(rw_packet));
-						new_packet=1;
-						if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
-							if (errno==ENOENT){
-								opcode=(u_short)ERROR;
-								err_pkt.err_code=FILE_NOT_FOUND;
-								err_pkt.opcode=ntohs(opcode);
-								memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
-							}
-							else{
-								printf("Error while calling stat.%s\n",strerror(errno));
-								close(sock);
-								break;
-							}
+						opcode= (u_short) ACK;
+						printf("7\n");
+						//prepraring the ack reply msg.
+						ack_pkt.block_num=ntohs(++last_ack_blk);
+						printf("8\n");
+						ack_pkt.opcode=ntohs(opcode);
+						printf("9\n");
+						if (ret_val<MAX_DATA_SIZE){
+							printf("10\n");
+							final_data_block=1;
+							close(fd);
 						}
-						fd = open(rw_pkt.file_name,O_RDWR,S_IRWXU | S_IRWXG | S_IRWXO);
-						if (fd<0){
+						printf("11\n");
+					}
+					else {
+						printf("12\n");
+						new_packet=0;
+					}
 
-							printf("Failed opening file.%s.\n",strerror(errno));
+
+					break;
+			case (ACK):
+					printf("ACK\n");
+					memcpy(&(ack_pkt),&(buffer),sizeof(ack_packet));
+					//we recieved a new ack packet.
+					if (ack_pkt.block_num == last_data_blk) {
+						new_packet=1;
+						/*final data block was sent by the server and now we got the final ack.
+						we can close the file and the connection.*/
+						if (final_data_block){
+							//normal termination.
+							close(fd);
+							close(sock);
+							client_connected=0;
+							continue;
 						}
-						//set the data msg.
-						opcode=(u_short)DATA;
-						data_pkt.block_num=last_data_blk;
-						data_pkt.opcode=ntohs(opcode);
+						data_pkt.block_num = ntohs(++last_data_blk);
+						data_pkt.opcode = ntohs((u_short)DATA);
 						ret_val=read(fd,data_pkt.data,MAX_DATA_SIZE);
+						//in case of failure - send error message to the client and close the file.
 						if (ret_val<0){
 							printf("Error reading from file.%s\n",strerror(errno));
 							close(fd);
 							fillErorMessage(&err_pkt,OTHER,strerror(errno));
 						}
-						//checks if final data block recieved.
-						final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
-				break;
-				case (DATA):
-						memcpy(&(data_pkt),&(buffer[2]),sizeof(data_packet));
-						//the last ack packet we sent was recievd. this is the response a data packet.
-						if (data_pkt.block_num==last_ack_blk+1){
-							new_packet=1;
-							ret_val=write(fd,data_pkt.data,MAX_DATA_SIZE);
-							if (ret_val<0){
-								opcode=(u_short) ERROR;
-								if (ENOSPC==errno){
-									fillErorMessage(&err_pkt,FULL_DISK,NULL);
-								}
-								else {
-									fillErorMessage(&err_pkt,OTHER,strerror(errno));
-								}
-								printf("Error writing to file.%s\n",strerror(errno));
-								close(fd);
-							}
-							opcode= (u_short) ACK;
-							//prepraring the ack reply msg.
-							ack_pkt.block_num=++last_ack_blk;
-							ack_pkt.opcode=ntohs(opcode);
-							if (ret_val<MAX_DATA_SIZE){
-								final_data_block=1;
-							}
-						}
 						else {
-							new_packet=0;
+							//checks if final data block read from file.
+							final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
 						}
-
-
-						break;
-				case (ACK):
-						memcpy(&(ack_pkt),&(buffer[2]),sizeof(ack_packet));
-						//we recieved a new ack packet.
-						if (ack_pkt.block_num == last_data_blk) {
-							new_packet=1;
-							/*final data block was sent by the server and now we got the final ack.
-							we can close the file and the connection.*/
-							if (final_data_block){
-								//normal termination.
-								close(fd);
-								close(sock);
-								client_connected=0;
-								continue;
-							}
-							data_pkt.block_num=++last_data_blk;
-							data_pkt.opcode=ntohs((u_short)DATA);
-							ret_val=read(fd,data_pkt.data,MAX_DATA_SIZE);
-							//in case of failure - send error message to the client and close the file.
-							if (ret_val<0){
-								printf("Error reading from file.%s\n",strerror(errno));
-								close(fd);
-								fillErorMessage(&err_pkt,OTHER,strerror(errno));
-							}
-							else {
-								//checks if final data block read from file.
-								final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
-							}
-						}
-						else {
-							new_packet=0;
-						}
-						opcode=(u_short)DATA;
+					}
+					else {
+						new_packet=0;
+					}
+					opcode=(u_short)DATA;
+			break;
+			default:
+				printf("Unknown!!!!!!\n");
 				break;
-				default:
-					break;
-				}
-				if (new_packet){
-					term_timeout=(double)clock()/CLOCKS_PER_SEC;
-				}
+			}
+			if (new_packet){
+				term_timeout=(double)clock()/CLOCKS_PER_SEC;
 			}
 		}
-		fillBuffer(buffer,opcode);
-		ret_val=sendto(sock,buffer,sizeof(buffer),0,&client_addr,sizeof(client_addr));
+
+		ret_val = send_data(opcode);
 		if (ret_val<0){
 			if (fd>0){
 				close(fd);

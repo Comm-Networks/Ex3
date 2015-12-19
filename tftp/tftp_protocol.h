@@ -16,7 +16,7 @@
 #define MAX_CLIENTS 6
 #define DEFAULT_PORT "6900"
 #define MAX_DATA_SIZE 512
-#define MODE "octec"
+#define MODE "octet"
 #define RRQ 1
 #define WRQ 2
 #define DATA 3
