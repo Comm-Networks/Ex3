@@ -43,13 +43,24 @@ void handle_termination(int signum) {
 
 void fillErorMessage(error_packet * err_pkt,u_short err_code,char* msg){
 	printf("Err Begin\n");
+	const char* msgs[] = {
+			"Not defined, see error message (if any).",
+			"File not found.",
+			"Access violation.",
+			"Disk full or allocation exceeded.",
+			"Illegal TFTP operation.",
+			"Unknown transfer ID.",
+			"File already exists.",
+			"No such user."
+	};
 	err_pkt->err_code=err_code;
 	err_pkt->opcode=ntohs(ERROR);
 	if (msg!=NULL){
 		memcpy(err_pkt->err_msg,msg,MAX_DATA_SIZE);
 	}
 	else {
-		memset(err_pkt->err_msg,0,MAX_DATA_SIZE);
+		memcpy(err_pkt->err_msg, msgs[err_code], strlen(msgs[err_code]));
+		printf("Err: %s\n", err_pkt->err_msg);
 	}
 	printf("Err End\n");
 }
@@ -178,6 +189,7 @@ int main(int argc,char** argv){
 			//check recieved packet type and prepare the output message.
 			switch (opcode){
 			case (WRQ):
+					last_ack_blk = 0;
 					printf("WRQ\n");
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
@@ -193,11 +205,12 @@ int main(int argc,char** argv){
 					if (ret_val>-1){
 						opcode=(u_short)ERROR;
 						size_to_send = sizeof(error_packet);
-						err_pkt.opcode=ntohs(opcode);
-						err_pkt.err_code=FILE_EXIST;
-						printf("Here\n");
-						memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
-						printf("Heree\n");
+						fillErorMessage(&err_pkt, FILE_EXIST, NULL);
+//						err_pkt.opcode=ntohs(opcode);
+//						err_pkt.err_code=FILE_EXIST;
+//						printf("Here\n");
+//						memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
+//						printf("Heree\n");
 					}
 					//file does not exist. we can open a new file.
 					else {
@@ -216,7 +229,8 @@ int main(int argc,char** argv){
 					}
 			break;
 			case (RRQ):
-					printf("RRQ\n");
+					last_data_blk = 1;
+					printf("RRQ - %d\n", last_data_blk);
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
 					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
