@@ -292,7 +292,7 @@ int main(int argc,char** argv){
 					if (data_pkt.block_num==last_ack_blk+1){
 						printf("2 - %d\n", fd);
 						new_packet=1;
-						ret_val=write(fd,data_pkt.data,MAX_DATA_SIZE);
+						ret_val=write(fd,data_pkt.data,strlen(data_pkt.data));
 						printf("3 - %d | %lu\n", ret_val, sizeof(data_pkt.data));
 						if (ret_val<0){
 							printf("4\n");
