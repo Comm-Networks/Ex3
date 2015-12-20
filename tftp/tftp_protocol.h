@@ -23,10 +23,12 @@
 #define ACK 4
 #define ERROR 5
 //error types macros
-#define FILE_EXIST 6
-#define FILE_NOT_FOUND 1
+
 #define OTHER 0
+#define FILE_NOT_FOUND 1
 #define FULL_DISK 3
+#define ILLEGAL_OPERATION 4
+#define FILE_EXIST 6
 
 #pragma pack(push, 1)
 typedef struct {
