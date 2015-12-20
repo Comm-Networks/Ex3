@@ -153,10 +153,6 @@ int main(int argc,char** argv){
 				}
 
 				if (bind(sock,rp->ai_addr,rp->ai_addrlen)!=-1){
-					struct sockaddr_in *ipv4 = (struct sockaddr_in *)rp->ai_addr;
-					char ipAddress[INET_ADDRSTRLEN];
-					inet_ntop(AF_INET, &(ipv4->sin_addr), ipAddress, INET_ADDRSTRLEN);
-					printf("Addr: %s\n", ipAddress);
 					break ; //successfuly binded
 				}
 				close(sock);
@@ -200,7 +196,6 @@ int main(int argc,char** argv){
 
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
-					printf("File: %s\n", rw_pkt.file_name);
 					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
 						if (errno!=ENOENT){
 							printf("Error while calling stat.%s\n",strerror(errno));
@@ -225,7 +220,11 @@ int main(int argc,char** argv){
 						if (fd<0){
 							printf("Failed opening the new file.%s.\n",strerror(errno));
 							opcode=(u_short) ERROR;
-							fillErrorMessage(&err_pkt,OTHER,strerror(errno));
+							if (errno == EACCES) {
+								fillErrorMessage(&err_pkt, ACCESS_VIOLATION, NULL);
+							} else {
+								fillErrorMessage(&err_pkt,OTHER,strerror(errno));
+							}
 							size_to_send = sizeof(error_packet);
 						}
 						else{
@@ -243,12 +242,10 @@ int main(int argc,char** argv){
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
 					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
-						if (errno==ENOENT){
+						if ((errno==ENOENT) || (errno == EACCES)){
 							opcode=(u_short)ERROR;
 							size_to_send = sizeof(error_packet);
-							err_pkt.err_code=FILE_NOT_FOUND;
-							err_pkt.opcode=ntohs(opcode);
-							memset(err_pkt.err_msg,0,MAX_DATA_SIZE);//no need for a message here, code is enough.
+							fillErrorMessage(&err_pkt, (errno == ENOENT) ? FILE_NOT_FOUND : ACCESS_VIOLATION, NULL);
 						}
 						else{
 							printf("Error while calling stat.%s\n",strerror(errno));
@@ -261,7 +258,11 @@ int main(int argc,char** argv){
 						if (fd<0){
 							printf("Failed opening file.%s.\n",strerror(errno));
 							opcode=(u_short) ERROR;
-							fillErrorMessage(&err_pkt,OTHER,strerror(errno));
+							if (errno == EACCES) {
+								fillErrorMessage(&err_pkt, ACCESS_VIOLATION, NULL);
+							} else {
+								fillErrorMessage(&err_pkt,OTHER,strerror(errno));
+							}
 							size_to_send = sizeof(error_packet);
 						}
 						else {
@@ -287,15 +288,11 @@ int main(int argc,char** argv){
 					memset(data_pkt.data, 0, MAX_DATA_SIZE);
 					memcpy(&(data_pkt),&(buffer),sizeof(data_packet));
 					data_pkt.block_num = htons(data_pkt.block_num);
-					printf("1 - %d | %d\n", data_pkt.block_num, last_ack_blk);
 					//the last ack packet we sent was recievd. this is the response a data packet.
 					if (data_pkt.block_num==last_ack_blk+1){
-						printf("2 - %d\n", fd);
 						new_packet=1;
 						ret_val=write(fd,data_pkt.data,strlen(data_pkt.data));
-						printf("3 - %d | %lu\n", ret_val, sizeof(data_pkt.data));
 						if (ret_val<0){
-							printf("4\n");
 							opcode=(u_short) ERROR;
 							size_to_send = sizeof(error_packet);
 							if (ENOSPC==errno){
@@ -304,30 +301,22 @@ int main(int argc,char** argv){
 							else {
 								fillErrorMessage(&err_pkt,OTHER,strerror(errno));
 							}
-							printf("5\n");
 							printf("Error writing to file.%s\n",strerror(errno));
 							closeAndAssign(&fd);
-							printf("6\n");
 						}
 						else {
 							opcode= (u_short) ACK;
 							size_to_send = sizeof(ack_packet);
-							printf("7\n");
 							//prepraring the ack reply msg.
 							ack_pkt.block_num=ntohs(++last_ack_blk);
-							printf("8\n");
 							ack_pkt.opcode=ntohs(opcode);
-							printf("9\n");
 							if (ret_val<MAX_DATA_SIZE){
-								printf("10\n");
 								final_data_block=1;
 								closeAndAssign(&fd);
 							}
-							printf("11\n");
 						}
 					}
 					else {
-						printf("12\n");
 						new_packet=0;
 					}
 
@@ -364,7 +353,6 @@ int main(int argc,char** argv){
 						else {
 							//checks if final data block read from file.
 							final_data_block = ret_val<MAX_DATA_SIZE ? 1 :0;
-							printf("Final: %lu | %lu\n", sizeof(data_pkt.data), strlen(data_pkt.data));
 						}
 					}
 					else {

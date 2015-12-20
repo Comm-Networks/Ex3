@@ -13,7 +13,6 @@
 #include <signal.h>
 
 
-#define MAX_CLIENTS 6
 #define DEFAULT_PORT "6900"
 #define MAX_DATA_SIZE 512
 #define MODE "octet"
@@ -26,6 +25,7 @@
 
 #define OTHER 0
 #define FILE_NOT_FOUND 1
+#define ACCESS_VIOLATION 2
 #define FULL_DISK 3
 #define ILLEGAL_OPERATION 4
 #define FILE_EXIST 6
