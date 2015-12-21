@@ -13,6 +13,9 @@
 #include <signal.h>
 
 
+#define DEBUG_PRINTS 0 // For debugging.
+
+
 #define DEFAULT_PORT "6900"
 #define MAX_DATA_SIZE 512
 #define MODE "octet"

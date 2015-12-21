@@ -20,8 +20,11 @@ void closeAndAssign(int* fd){
 int send_data(u_short opcode, int size_to_send) {
 	switch (opcode) {
 	case ACK:
-		printf("Block: %d\n", ack_pkt.block_num);
+		if (DEBUG_PRINTS) {
+			printf("Block: %d\n", ack_pkt.block_num);
+		}
 		return sendto(sock, &ack_pkt, size_to_send, 0, &client_addr, sizeof(client_addr));
+
 	case DATA:
 		return sendto(sock, &data_pkt, size_to_send, 0, &client_addr, sizeof(client_addr));
 
@@ -48,7 +51,6 @@ void handle_termination(int signum) {
 }
 
 void fillErrorMessage(error_packet * err_pkt,u_short err_code,char* msg){
-	printf("Err Begin\n");
 	const char* msgs[] = {
 			"Not defined, see error message (if any).",
 			"File not found.",
@@ -68,7 +70,6 @@ void fillErrorMessage(error_packet * err_pkt,u_short err_code,char* msg){
 		memcpy(err_pkt->err_msg, msgs[err_code], strlen(msgs[err_code]));
 		printf("Err: %s\n", err_pkt->err_msg);
 	}
-	printf("Err End\n");
 }
 
 
@@ -167,7 +168,9 @@ int main(int argc,char** argv){
 				continue;
 			}
 			freeaddrinfo(my_addr);
-			printf("Connected!!\n");
+			if (DEBUG_PRINTS) {
+				printf("Binded Successfully (port: %s)\n", port);
+			}
 			client_connected=1;
 		}
 		slen=sizeof(client_addr);
@@ -176,23 +179,37 @@ int main(int argc,char** argv){
 
 		memset(buffer, 0, sizeof(rw_packet));
 		int recv_bytes = recvfrom(sock,buffer,sizeof(buffer),0,&client_addr,&slen);
-		if (client_addr.sa_family==AF_INET6){
-			//TODO
+
+		if (DEBUG_PRINTS) {
+			printf("recv bytes: %d\n",recv_bytes);
 		}
-		printf("recv bytes: %d",recv_bytes);
+
 		if (recv_bytes<0){
-			printf("Recieving failed.Discconeting client: %s.\n",strerror(errno));
+			if (errno == EAGAIN) {
+				// Timeout reached.
+				if (DEBUG_PRINTS) {
+					printf("Socket timeout reached.\n");
+				}
+			} else {
+				// Error, and not timeout.
+				printf("Receiving failed. Disconnecting client: %s.\n",strerror(errno));
+			}
 			continue;
 		}
 		else{
-			printf("Recieved a msg: ");
+			if (DEBUG_PRINTS) {
+				printf("Recieved a msg: ");
+			}
 			memcpy(&opcode,buffer,sizeof(u_short));
 			opcode = htons(opcode);
 			//check recieved packet type and prepare the output message.
 			switch (opcode){
 			case (WRQ):
-					last_ack_blk = 0;
-					printf("WRQ\n");
+					if (DEBUG_PRINTS) {
+						printf("WRQ\n");
+					}
+
+					last_ack_blk = 0; // Init session.
 
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
@@ -212,10 +229,10 @@ int main(int argc,char** argv){
 					}
 					//file does not exist. we can open a new file.
 					else {
-						if (fd>0){
+						if (fd>0){ // Making sure fd is closed in the beginning of the session.
 							close(fd);
-							printf("fd is now closed\n");
 						}
+
 						fd = open(rw_pkt.file_name, O_WRONLY | O_TRUNC | O_CREAT,S_IRWXU | S_IRWXG | S_IRWXO);
 						if (fd<0){
 							printf("Failed opening the new file.%s.\n",strerror(errno));
@@ -237,12 +254,17 @@ int main(int argc,char** argv){
 					}
 			break;
 			case (RRQ):
-					last_data_blk = 1;
-					printf("RRQ - %d\n", last_data_blk);
+					if (DEBUG_PRINTS) {
+						printf("RRQ\n");
+					}
+
+					last_data_blk = 1; // Init session.
+
 					memcpy(&(rw_pkt),&(buffer),sizeof(rw_packet));
 					new_packet=1;
 					if ((ret_val=stat(rw_pkt.file_name,&st_buf))<0){
-						if ((errno==ENOENT) || (errno == EACCES)){
+						if ((errno==ENOENT) || (errno == EACCES)) {
+							// File not found or access violation error.
 							opcode=(u_short)ERROR;
 							size_to_send = sizeof(error_packet);
 							fillErrorMessage(&err_pkt, (errno == ENOENT) ? FILE_NOT_FOUND : ACCESS_VIOLATION, NULL);
@@ -284,7 +306,10 @@ int main(int argc,char** argv){
 					}
 			break;
 			case (DATA):
-					printf("DATA\n");
+					if (DEBUG_PRINTS) {
+						printf("DATA\n");
+					}
+
 					memset(data_pkt.data, 0, MAX_DATA_SIZE);
 					memcpy(&(data_pkt),&(buffer),sizeof(data_packet));
 					data_pkt.block_num = htons(data_pkt.block_num);
@@ -293,6 +318,7 @@ int main(int argc,char** argv){
 						new_packet=1;
 						ret_val=write(fd,data_pkt.data,strlen(data_pkt.data));
 						if (ret_val<0){
+							// Error writing to file.
 							opcode=(u_short) ERROR;
 							size_to_send = sizeof(error_packet);
 							if (ENOSPC==errno){
@@ -323,7 +349,9 @@ int main(int argc,char** argv){
 
 					break;
 			case (ACK):
-					printf("ACK\n");
+					if (DEBUG_PRINTS) {
+						printf("ACK\n");
+					}
 
 					memcpy(&(ack_pkt),&(buffer),sizeof(ack_packet));
 					//we recieved a new ack packet.
@@ -333,7 +361,9 @@ int main(int argc,char** argv){
 						/*final data block was sent by the server and now we got the final ack.
 						we can close the file and the connection.*/
 						if (final_data_block){
-							printf("final ack sent by server\n");
+							if (DEBUG_PRINTS) {
+								printf("final ack sent by server.\n");
+							}
 							closeAndAssign(&fd);
 							closeAndAssign(&sock);
 							client_connected=0;
@@ -343,7 +373,9 @@ int main(int argc,char** argv){
 						data_pkt.block_num = ntohs(++last_data_blk);
 						data_pkt.opcode = ntohs((u_short)DATA);
 						ret_val=read(fd,data_pkt.data,MAX_DATA_SIZE);
-						printf("read bytes: %d\n",ret_val);
+						if (DEBUG_PRINTS) {
+							printf("read bytes: %d\n", ret_val);
+						}
 						//in case of failure - send error message to the client and close the file.
 						if (ret_val<0){
 							printf("Error reading from file.%s\n",strerror(errno));
